@@ -10,39 +10,18 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2
 
 from src.cocodataset import COCODataset
-from src.loss import HybridLoss, DiceLoss, EdgeFocalLoss, MultiClassFocalLoss
-from src.model import ResnetBackbone, Model
+from src.loss import HybridLoss, DiceLoss, HybridLoss_pixel_wise_uncertainty, HybridLoss_image_wise_uncertainty, \
+    edge_dice_loss, combo_loss
+from src.model_all import ResnetBackbone, Model, Resnet_model_backbone_mse, Swin_backbone
 from collections import Counter
 import numpy as np
 import torch.distributed as dist
 
-
-def compute_class_weights(dataset, num_classes=8):
-    pixel_counts = Counter()
-    for _, mask in dataset:
-        unique, counts = np.unique(mask.numpy(), return_counts=True)
-        pixel_counts.update(dict(zip(unique, counts)))
-
-    # Ensure all classes have a count (even if 0)
-    weights = []
-    total_pixels = sum(pixel_counts.values())
-
-    for i in range(num_classes):
-        class_count = pixel_counts.get(i, 0)
-        # Compute inverse frequency with smoothing factor
-        weight = total_pixels / (class_count + 1e-6)
-        weights.append(weight)
-
-    # Normalize weights
-    weights = torch.tensor(weights, dtype=torch.float32)
-    weights = weights / weights.sum() * num_classes
-
-    return weights
-
 # Dataset Configuration
 class DataConfig:
     BASE_DIR = '/root/final_dataset_edge'
-    WORK_DIR = '/root/hy-nas/auto-weights-resnet50'
+    WORK_DIR = '/root/hy-data/auto-weights-resnet50'
+    TEST_DIR = '/root/hy-data/auto-weights-resnet50-test'
     SPLITS = {
         'train': 'train',
         'valid': 'valid',
@@ -56,17 +35,18 @@ class DataConfig:
 
 # Training Configuration
 class TrainConfig:
-    BATCH_SIZE = 8
+    BATCH_SIZE = 4
     NUM_EPOCHS = 100
     VAL_FREQUENCY = 10
     NUM_WORKERS = 4
 
     # Optimizer settings
-    LEARNING_RATE = 3e-5
+    LEARNING_RATE = 1e-4
     BETAS = (0.9, 0.999)
     EPSILON = 1e-8
     WEIGHT_DECAY = 1e-4
-    EARLY_STOPPING = 2
+    EARLY_STOPPING = 10
+    WARM_UP_EPOCHS = 10
 
     # Scheduler settings
     #SCHEDULER_STEP_SIZE = 20
@@ -152,9 +132,8 @@ val_loader = DataLoader(val_dataset,
 
 # Model initialization
 model = Model(num_classes=DataConfig.NUM_CLASSES)
+#model = Swin_backbone(num_classes=DataConfig.NUM_CLASSES)
 
-# Training components
-#weights = compute_class_weights(train_dataset).to(device)
 #weights = torch.tensor([0.1, 1, 1, 1, 1, 1, 1, 1]).to(device)
 local_rank = int(os.environ['LOCAL_RANK'])
 device = torch.device('cuda', local_rank)
@@ -170,22 +149,21 @@ class_weights = torch.tensor([0.1,
                               ], dtype=torch.float32).to(device)
 
 
-criterion = HybridLoss(ce_weight_tensor=class_weights)
-#criterion = MultiClassFocalLoss(alpha = class_weights, gamma=2.0, reduction='mean')
-#criterion_edge = nn.BCEWithLogitsLoss()
-criterion_edge = EdgeFocalLoss()
+criterion = HybridLoss_image_wise_uncertainty(ce_weight_tensor=class_weights)
+base_criterion = HybridLoss(ce_weight_tensor=class_weights)
+#edge_criterion = combo_loss()
 
 
-optimizer = optim.Adam(
+optimizer = optim.AdamW(
     model.parameters(),
     lr=TrainConfig.LEARNING_RATE,
     betas=TrainConfig.BETAS,
     eps=TrainConfig.EPSILON,
     weight_decay=TrainConfig.WEIGHT_DECAY
 )
-warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.2, total_iters=5)
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=95, eta_min=1e-6)
-scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[5])
+warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.2, total_iters=TrainConfig.WARM_UP_EPOCHS)
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=TrainConfig.NUM_EPOCHS-TrainConfig.WARM_UP_EPOCHS, eta_min=1e-6)
+scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[TrainConfig.WARM_UP_EPOCHS])
 
 #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=TrainConfig.SCHEDULER_STEP_SIZE, gamma=TrainConfig.SCHEDULER_GAMMA)
 #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=TrainConfig.NUM_EPOCHS, eta_min=0)

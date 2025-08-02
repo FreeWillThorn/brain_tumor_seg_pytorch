@@ -4,10 +4,9 @@ from src.config import class_names
 import torch.distributed as dist
 import torchvision.utils as vutils
 import torchvision.transforms.functional as TF
+import numpy as np
 import matplotlib.pyplot as plt
 import numpy as np
-import cv2
-
 
 def is_main_process():
     if not dist.is_available():
@@ -28,8 +27,6 @@ def print_validation_metrics(epoch_counter, total_train_loss, val_metrics):
     if is_main_process():
         print(f"\nEpoch {epoch_counter}:")
         print(f"Total Train Loss: {total_train_loss:.4f}")
-        print(f"Seg_Val_loss: {val_metrics['seg_val_loss']:.4f}")
-        print(f"Edge_Val_loss: {val_metrics['edge_val_loss']:.4f}")
         print(f"Total Val Loss: {val_metrics['total_val_loss']:.4f}")
         print(f"Val mIoU: {val_metrics['mIoU']:.4f}")
         print(f"Val mAcc: {val_metrics['mAcc']:.4f}")
@@ -79,47 +76,87 @@ def tensor_to_python(obj):
         return obj
 
 
-def overlay_segmentation(image, mask, class_idx=6, color=(255, 0, 128)):
+def visualize_prediction(image, mask, pred, save_path):
     """
-    Overlay the specified class mask on the original image.
-
+    Visualize the prediction overlapped on the input image.
     Args:
-        image: Tensor [C, H, W] or ndarray [H, W, C]
-        mask: Tensor or ndarray [H, W] with class indices
-        class_idx: class index to highlight
-        color: BGR tuple for overlay color
-
-    Returns:
-        overlay image as Tensor [3, H, W] with values in [0, 1]
+        image: tensor of shape [3, H, W]
+        mask: tensor of shape [H, W]
+        pred: tensor of shape [H, W]
+        save_path: path to save the visualization
     """
-    if isinstance(image, torch.Tensor):
-        image = image.cpu().numpy()
-    if isinstance(mask, torch.Tensor):
-        mask = mask.cpu().numpy()
 
-    if image.shape[0] == 3:
-        image = np.transpose(image, (1, 2, 0))  # [H, W, 3]
 
-    if image.max() <= 1.0:
-        image = (image * 255).astype(np.uint8)
-    else:
-        image = image.astype(np.uint8)
+    # Convert tensors to numpy arrays
+    image = image.cpu().numpy().transpose(1, 2, 0)  # [H, W, 3]
+    mask = mask.cpu().numpy()
+    pred = pred.cpu().numpy()
 
-    # If grayscale, convert to RGB
-    if image.shape[2] == 1 or len(image.shape) == 2:
-        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    # Normalize image for visualization
+    image = (image - image.min()) / (image.max() - image.min())
 
-    overlay = image.copy()
-    binary_mask = (mask == class_idx).astype(np.uint8)
+    # Create color maps for mask and prediction
+    colors = [
+        [0, 0, 0],  # Background (black)
+        [1, 0.2, 0.2],  # Glioblastoma (bright red)
+        [0.4, 0.8, 0],  # Ganglioglioma (lime green)
+        [0, 0.6, 1],  # Meningioma (sky blue)
+        [1, 0.5, 0],  # Neuroblastoma (orange)
+        [0.8, 0, 0.8],  # Oligodendroglioma (purple)
+        [1, 0.8, 0],  # Pituitary (gold)
+        [0, 0.8, 0.8],  # Schwannoma (teal)
+    ]
 
-    # Colorize the predicted region
-    colored_mask = np.zeros_like(image)
-    colored_mask[binary_mask == 1] = color
+    class_names = [
+        'Background', 'Glioblastoma', 'Ganglioglioma', 'Meningioma', 'Neuroblastoma','Oligodendroglioma', 'Pituitary', 'Schwannoma'
+    ]
 
-    # Blend original and mask
-    overlay = cv2.addWeighted(overlay, 0.6, colored_mask, 0.4, 0)
+    # Create RGB masks
+    mask_rgb = np.zeros((*mask.shape, 3))
+    pred_rgb = np.zeros((*pred.shape, 3))
 
-    # Convert back to tensor [C, H, W], float32 [0, 1]
-    overlay = np.transpose(overlay, (2, 0, 1))
-    overlay = overlay.astype(np.float32) / 255.0
-    return torch.tensor(overlay)
+    for i, color in enumerate(colors):
+        mask_rgb[mask == i] = color
+        pred_rgb[pred == i] = color
+        #pred_name = class_names[pred[i]]
+
+    # Create figure with subplots
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+
+    # Plot original image
+    axes[0].imshow(image)
+    axes[0].set_title(f'Original Image')
+    axes[0].axis('off')
+
+    # Plot ground truth mask
+    axes[1].imshow(mask_rgb)
+    axes[1].set_title('Ground Truth')
+    axes[1].axis('off')
+
+    # Plot prediction
+    axes[2].imshow(pred_rgb)
+    axes[2].set_title('Prediction')
+    axes[2].axis('off')
+
+    # Add text labels
+    unique_classes = np.unique(pred)
+    for cls_id in unique_classes:
+        y, x = np.where(pred == cls_id)
+        if len(x) > 0 and len(y) > 0:
+            axes[2].text(
+                int(np.mean(x)), int(np.mean(y)),
+                class_names[cls_id],
+                color='white', fontsize=6, ha='left', va='bottom',
+                bbox=dict(facecolor='black', alpha=0.5, edgecolor='none')
+            )
+
+    # Plot overlay
+    pred_overlay = image.copy()
+    pred_overlay = pred_overlay * 0.7 + pred_rgb * 0.3
+    axes[3].imshow(pred_overlay)
+    axes[3].set_title('pred_overlay')
+    axes[3].axis('off')
+
+    # Save the figure
+    plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
+    plt.close()

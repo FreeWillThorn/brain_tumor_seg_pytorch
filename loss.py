@@ -1,11 +1,9 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from mimetypes import inited
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.ops import sigmoid_focal_loss
+
 
 
 class DiceLoss(nn.Module):
@@ -30,8 +28,25 @@ class DiceLoss(nn.Module):
         loss = 1 - dice
         return loss.mean()  # Mean over batch and classes
 
+class DiceLoss_pic_wise(nn.Module):
+    def __init__(self, smooth=1.0, reduction='none'):
+        super(DiceLoss_pic_wise, self).__init__()
+        self.smooth = smooth
+        self.reduction = reduction
+
+    def forward(self, preds, targets):
+        preds = F.softmax(preds, dim=1)
+        one_hot = F.one_hot(targets, num_classes=preds.shape[1]).permute(0, 3, 1, 2).float()
+
+        intersection = (preds * one_hot).sum(dim=(2, 3))  # [B, C]
+        union = preds.sum(dim=(2, 3)) + one_hot.sum(dim=(2, 3))  # [B, C]
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        loss = 1 - dice  # [B, C]
+        return loss.mean(dim=1)  # [B] → per-image dice loss return average over
+
+
 class HybridLoss(nn.Module):
-    def __init__(self, ce_weight=None, dice_weight=0.5, ce_weight_tensor=None):
+    def __init__(self, ce_weight=None, dice_weight=0.9, ce_weight_tensor=None):
         super(HybridLoss, self).__init__()
         self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor)
         self.dice = DiceLoss()
@@ -39,55 +54,98 @@ class HybridLoss(nn.Module):
         self.ce_weight = 1 - dice_weight
 
     def forward(self, preds, targets):
-        return self.ce_weight * self.ce(preds, targets) + self.dice_weight * self.dice(preds, targets)
+        hybrid_loss = self.ce_weight * self.ce(preds, targets) + self.dice_weight * self.dice(preds, targets)
+        return hybrid_loss
+
+class HybridLoss_image_wise_uncertainty(nn.Module):
+    def __init__(self, ce_weight=None, dice_weight=0.9, ce_weight_tensor=None):
+        super(HybridLoss_image_wise_uncertainty, self).__init__()
+        self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor)
+        self.dice = DiceLoss_pic_wise() # Use the new DiceLoss_new for per-image calculation
+        self.dice_weight = dice_weight
+        self.ce_weight = 1 - dice_weight
+
+    def forward(self, preds, targets,log_var):
+        hybrid_loss = self.ce_weight * self.ce(preds, targets) + self.dice_weight * self.dice(preds, targets)
+        #print(f"hybrid_loss shape: {hybrid_loss.shape}, hybrid_loss: {hybrid_loss}")
+        # Scale by uncertainty
+        log_var = log_var.squeeze(1)  # shape [B, H, W]
+        log_var = F.adaptive_avg_pool2d(log_var, (1, 1)).squeeze()  # [B]
+        #print(f"log_var shape: {log_var.shape}, log_var: {log_var}")
+        weighted_loss = (1 / (2 * torch.exp(log_var))) * hybrid_loss + 0.5 * log_var
+        return weighted_loss.mean()
 
 
-class EdgeFocalLoss:
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
+class HybridLoss_pixel_wise_uncertainty(nn.Module):
+    def __init__(self, ce_weight_tensor=None, dice_weight=0.7):
+        super(HybridLoss_pixel_wise_uncertainty, self).__init__()
+        self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor, reduction='none')  # per-pixel
+        self.dice = DiceLoss_pic_wise()  # per-image
+        self.dice_weight = dice_weight
+        self.ce_weight = 1 - dice_weight
 
-    def __call__(self, input, target):
-        return sigmoid_focal_loss(
-            input,
-            target,
-            alpha=self.alpha,
-            gamma=self.gamma,
-            reduction=self.reduction
-        )
+    def forward(self, preds, targets, log_var):
+        # preds: [B, C, H, W], targets: [B, H, W], log_var: [B, 1, H, W]
+        #B = preds.shape[0]
+
+        # Per-pixel CE
+        ce_loss = self.ce(preds, targets)  # [B, H, W]
+        log_var = log_var.squeeze(1)  # [B, H, W]
+        log_var = torch.clamp(log_var, min=-5.0, max=5.0)
+        ce_loss_scaled = (1 / (2 * torch.exp(log_var))) * ce_loss + 0.5 * log_var  # [B, H, W]
+        ce_loss_scaled = ce_loss_scaled.mean(dim=(1, 2))  # [B]
+
+        # Per-image Dice
+        dice_loss = self.dice(preds, targets)  # [B]
+
+        # Final hybrid loss per image
+        hybrid_loss = self.ce_weight * ce_loss_scaled + self.dice_weight * dice_loss  # [B]
+        if torch.isnan(hybrid_loss).any():
+            print("NaN detected in hybrid_loss!")
+            print("log_var stats:", log_var.min().item(), log_var.max().item())
+            print("ce_loss_scaled stats:", ce_loss_scaled.min().item(), ce_loss_scaled.max().item())
+            print("dice_loss stats:", dice_loss.min().item(), dice_loss.max().item())
+            exit()
+
+        return hybrid_loss.mean()  # scalar
 
 
-class MultiClassFocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
-        super().__init__()
-        if isinstance(alpha, (list, torch.Tensor)):
-            self.alpha = alpha.detach().clone() if isinstance(alpha, torch.Tensor) else torch.tensor(alpha, dtype=torch.float32)
-        else:
-            self.alpha = None  # scalar alpha will be applied uniformly
-        self.gamma = gamma
-        self.reduction = reduction
+def edge_dice_loss(preds, targets, smooth=1e-6):
+    preds = torch.sigmoid(preds)
+    preds = preds.view(preds.size(0), -1)
+    targets = targets.view(targets.size(0), -1)
+    intersection = (preds * targets).sum(1)
+    union = preds.sum(1) + targets.sum(1)
+    dice = (2. * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()
 
-    def forward(self, inputs, targets):
-        """
-        inputs: [B, C, H, W] — raw logits
-        targets: [B, H, W] — integer class labels
-        """
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')  # [B, H, W]
-        pt = torch.exp(-ce_loss)  # softmax probability of correct class
+def binary_focal_loss(logits, targets, alpha=0.25, gamma=2.0):
+    probs = torch.sigmoid(logits)
+    ce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+    p_t = probs * targets + (1 - probs) * (1 - targets)
+    alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+    focal_loss = alpha_t * (1 - p_t) ** gamma * ce_loss
+    return focal_loss.mean()
 
-        if self.alpha is not None:
-            if self.alpha.device != inputs.device:
-                self.alpha = self.alpha.to(inputs.device)
-            # Gather alpha for each target pixel
-            alpha_t = self.alpha[targets]  # [B, H, W]
-        else:
-            alpha_t = 1.0
 
-        focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
+def binary_dice_loss(preds, targets, smooth=1e-6):
+    preds = torch.sigmoid(preds)
+    preds_flat = preds.view(preds.size(0), -1)
+    targets_flat = targets.view(targets.size(0), -1)
 
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        return focal_loss
+    intersection = (preds_flat * targets_flat).sum(1)
+    union = preds_flat.sum(1) + targets_flat.sum(1)
+    dice = (2 * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()
+
+class combo_loss(nn.Module):
+    def __init__(self, bce_weight=0.1):
+        super(combo_loss, self).__init__()
+        self.bce = None
+        self.dice = None
+        self.bce_weight = bce_weight
+
+    def forward(self, preds, targets,scale=1.0):
+        bce = F.binary_cross_entropy_with_logits(preds, targets, pos_weight=torch.tensor([20.0], device=preds.device))
+        dice = binary_dice_loss(preds, targets)
+        return scale * (self.bce_weight * bce + (1 - self.bce_weight) * dice)

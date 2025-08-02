@@ -37,14 +37,14 @@ class COCODataset(Dataset):
 
         image = PImage.open(os.path.join(self.img_dir, fname))
         mask = PImage.open(os.path.join(self.mask_dir, fname).replace('.jpg', '_mask.png'))#.convert('L')  # Convert mask to grayscale
-        edge_mask = PImage.open(os.path.join(self.edge_mask_dir, fname).replace('.jpg', '_mask_edge.png'))
+        #edge_mask = PImage.open(os.path.join(self.edge_mask_dir, fname).replace('.jpg', '_mask_edge.png'))
         image = Image(torch.tensor(np.array(image)).permute(2, 0, 1))  # Wrap with tv_tensors.Image
         mask = Mask(torch.tensor(np.array(mask), dtype=torch.long))  # Wrap with Mask
-        edge_mask = Mask(torch.tensor(np.array(edge_mask), dtype=torch.float32))
+        #edge_mask = Mask(torch.tensor(np.array(edge_mask), dtype=torch.float32))
         if self.transform:
-            sample = self.transform({"image": image, "mask": mask, "edge_mask": edge_mask})
-            image, mask,edge_mask = sample["image"], sample["mask"],sample["edge_mask"]
-        return image, mask,edge_mask
+            sample = self.transform({"image": image, "mask": mask})
+            image, mask = sample["image"], sample["mask"]
+        return image, mask
 
 
 

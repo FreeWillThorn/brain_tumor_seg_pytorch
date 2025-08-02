@@ -1,34 +1,45 @@
 import json, datetime
 import torch
 from torch.utils.data import DataLoader
+from src.utils import *
 from tqdm import tqdm
 import os
 from src import config
 from src.metrics import Metrics
-from src.model import Model  # Adjust if your model class is named differently
+from src.model_all import Model,Swin_backbone  # Adjust if your model class is named differently
 from src.config import DataConfig  # Adjust import as needed
 from src.cocodataset import COCODataset  # Replace with your dataset class
 from src.utils import print_test_metrics, tensor_to_python
+from collections import OrderedDict
 
 
-def test(model, test_loader, num_classes, device, criterion=None, save_path=None):
+def test(model, test_loader, num_classes, device, test_dir, save_path=None):
     model.eval()
     test_metrics = Metrics(num_classes, device)
 
     #total_loss = 0.0
 
+
     with torch.no_grad():
-        for images, masks,edge_masks in tqdm(test_loader, desc="Testing"):
+        for batch_idx, (images, masks) in enumerate(tqdm(test_loader, desc="Testing")):
+            index_pic = 0
             images = images.to(device)
             masks = masks.to(device)
-            edge_masks = edge_masks.to(device)
-            outputs = model(images)
-            preds = torch.argmax(outputs[0], dim=1)
-
+            outputs = model(images)[0]
+            preds = torch.argmax(outputs, dim=1)
             test_metrics.generate_matrix(preds, masks)
-
-            #if criterion is not None:
-            #    total_loss += criterion(outputs, masks).item()
+            #vis_path = os.path.join(save_path, f'test.png')
+            date = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            vis_path = os.path.join(config.DataConfig.TEST_DIR, 'predictions', str(date) + "_" + str(index_pic) + ".png")
+            os.makedirs(os.path.dirname(vis_path), exist_ok=True)
+            if batch_idx% 10 == 0:
+                visualize_prediction(
+                    images[0],
+                    masks[0],
+                    preds[0],
+                    vis_path
+                )
+                index_pic += 1
 
     results = {
         #'test_loss': total_loss / len(test_loader) if criterion is not None else None,
@@ -42,7 +53,9 @@ def test(model, test_loader, num_classes, device, criterion=None, save_path=None
     }
     print_test_metrics(results)
     results = tensor_to_python(results)
+
     if save_path:
+        save_path = os.path.join(test_dir, str(date)  + ".json")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         with open(save_path, 'w') as f:
             json.dump(results, f, indent=4)
@@ -56,11 +69,11 @@ def main():
     device = torch.device('cuda', local_rank)
     num_classes = DataConfig.NUM_CLASSES  # Adjust as needed
     # Load model
-    model = Model(num_classes=num_classes, weights=None)  # No pretrained weights
+    model = Model(num_classes=num_classes)  # No pretrained weights
     #model.load_state_dict(torch.load('/root/code/runs/20250619_011121/best_mIou_epoch_90.pth', map_location=device))
-    state_dict = torch.load('/root/hy-nas/auto-weights-resnet50/20250706_022524/best_mIou_epoch_80.pth', map_location=device)
+    state_dict = torch.load('/root/hy-data/auto-weights-resnet50/20250731_040026/best_mIou_epoch_100.pth', map_location=device)
     # Remove 'module.' prefix if present
-    from collections import OrderedDict
+
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
         name = k.replace('module.', '')  # remove 'module.' if needed
@@ -77,11 +90,7 @@ def main():
 
     ) # Adjust as neede
 
-    # Define loss function if needed
-    #criterion = torch.nn.CrossEntropyLoss()
-
-    # Run test
-    results = test(model, test_loader, num_classes, device, save_path=f'/root/code/runs/test/test_results_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+    results = test(model, test_loader, num_classes, device,test_dir=config.DataConfig.TEST_DIR)
 
     print(json.dumps(results, indent=4))
 
