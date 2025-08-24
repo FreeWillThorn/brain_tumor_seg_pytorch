@@ -71,7 +71,7 @@ def main():
     # Load model
     model = Model(num_classes=num_classes)  # No pretrained weights
     #model.load_state_dict(torch.load('/root/code/runs/20250619_011121/best_mIou_epoch_90.pth', map_location=device))
-    state_dict = torch.load('/root/hy-data/auto-weights-resnet50/20250731_040026/best_mIou_epoch_100.pth', map_location=device)
+    state_dict = torch.load('/root/hy-nas/auto-weights-resnet50/20250823_005609/best_mIou_epoch_80.pth', map_location=device)
     # Remove 'module.' prefix if present
 
     new_state_dict = OrderedDict()

@@ -4,7 +4,7 @@ import torch.nn as nn
 from torchvision.models import resnet50, swin_transformer, swin_v2_b, ResNet50_Weights, Swin_V2_B_Weights, \
     convnext_large, ConvNeXt_Large_Weights, ResNet152_Weights, resnet101
 from torchvision.ops import SqueezeExcitation
-#from torchinfo import summary
+from torchinfo import summary
 import torch.nn.functional as F
 
 
@@ -50,11 +50,8 @@ class MultiScaleAdaptiveFusion(nn.Module):
             else:
                 in_channel = inchannels_list[i] + out_channel # 512 + 1536 = 2048, 256 + 1024 = 1280
             out_channel = in_channel // 2  #  3072// 2 = 1536, 2048 // 2 = 1024, 1280 // 2 = 640
-            # in_channels = [3072,2048,1280] # inchannels_list
-            # out_channels = [1536,1024,640] # outchannels_list
             self.channel_reducers.append(nn.Conv2d(in_channel, out_channel, kernel_size=1, padding=0))
             self.attention_mechanism.append(SqueezeExcitation(out_channel, out_channel))  # SqueezeExcitation block
-            #self.attention_mechanism.append(CBAM(out_channel, r=8))  # CBAM block
         self.final_out_channel = out_channel
 
 
@@ -117,6 +114,7 @@ class Model(nn.Module):
         self.msaf = MultiScaleAdaptiveFusion(inchannels_list=[192, 384, 768, 1536])
         self.mse = MultiScaleExtraction(1536, 1536)
         final_out_channels = self.msaf.final_out_channel
+        #final_out_channels = 1536
         self.classifier = nn.Conv2d(final_out_channels, num_classes, kernel_size=1)
         self.log_var_head = nn.Conv2d(final_out_channels, 1, kernel_size=1)
         self.seg_head = nn.Sequential(
@@ -128,8 +126,9 @@ class Model(nn.Module):
 
     def forward(self, x):
         features = self.backbone(x)
-        features[3] = self.mse(features[3])
-        fused_features = self.msaf(features)
+        features[3] = self.mse(features[3]) # module - fusion
+        fused_features =features[3] # only backbone
+        #fused_features = self.msaf(features) #module - skip connection
         #fused_features = self.dropout(fused_features)
         seg_logits = self.seg_head(fused_features)
         var_logits = self.log_var_head(fused_features)
@@ -139,14 +138,14 @@ class Model(nn.Module):
 
 
 
-# #
 # # #
+# # # #
 # if __name__ == "__main__":
 #     #model = Model(num_classes=8)
 #     model = Model(8)
 #
 #     #model = Resnet_backbone(num_classes=8, weights=None)
-#     #summary(model, (1,3, 640, 640))  # Print model summary for input size (3, 640, 640)
+#     summary(model, (1,3, 640, 640))  # Print model summary for input size (3, 640, 640)
 #
 #     input = torch.randn(1, 3, 640, 640)  # Example input tensor
 #     output = model(input)  # Forward pass

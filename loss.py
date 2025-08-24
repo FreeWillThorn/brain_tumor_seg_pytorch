@@ -71,7 +71,10 @@ class HybridLoss_image_wise_uncertainty(nn.Module):
         # Scale by uncertainty
         log_var = log_var.squeeze(1)  # shape [B, H, W]
         log_var = F.adaptive_avg_pool2d(log_var, (1, 1)).squeeze()  # [B]
-        #print(f"log_var shape: {log_var.shape}, log_var: {log_var}")
+        # stabilize
+        #log_var = torch.clamp(log_var, -5.0, 5.0)
+        # optional temperature to de-emphasize uncertainty (start < 1.0)
+        #tau = 0.5
         weighted_loss = (1 / (2 * torch.exp(log_var))) * hybrid_loss + 0.5 * log_var
         return weighted_loss.mean()
 

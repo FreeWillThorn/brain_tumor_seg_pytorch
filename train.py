@@ -30,14 +30,13 @@ def train_one_epoch(model,train_dataloader, optimizer, device, criterion,epoch_c
 
         optimizer.zero_grad()
         seg_logit,log_var= model(image) # [B, C, H, W]
-
-        loss_main = criterion(seg_logit, mask,log_var)
+        loss_main = criterion(seg_logit, mask,log_var)  # [B, H, W]
         loss_total = loss_main
         loss_total.backward()
         optimizer.step()
 
         total_train_loss += loss_total.item()
-        #total_edge_loss += edge_loss.item()
+
 
     return total_train_loss / len(train_dataloader)
 

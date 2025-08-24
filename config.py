@@ -20,7 +20,7 @@ import torch.distributed as dist
 # Dataset Configuration
 class DataConfig:
     BASE_DIR = '/root/final_dataset_edge'
-    WORK_DIR = '/root/hy-data/auto-weights-resnet50'
+    WORK_DIR = '/root/hy-nas/auto-weights-resnet50'
     TEST_DIR = '/root/hy-data/auto-weights-resnet50-test'
     SPLITS = {
         'train': 'train',
@@ -150,6 +150,7 @@ class_weights = torch.tensor([0.1,
 
 
 criterion = HybridLoss_image_wise_uncertainty(ce_weight_tensor=class_weights)
+#criterion =HybridLoss(ce_weight_tensor=class_weights)
 base_criterion = HybridLoss(ce_weight_tensor=class_weights)
 #edge_criterion = combo_loss()
 
