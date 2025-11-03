@@ -6,7 +6,7 @@ from tqdm import tqdm
 import os
 from src import config
 from src.metrics import Metrics
-from src.model_all import Model,Swin_backbone  # Adjust if your model class is named differently
+from src.model import Model
 from src.config import DataConfig  # Adjust import as needed
 from src.cocodataset import COCODataset  # Replace with your dataset class
 from src.utils import print_test_metrics, tensor_to_python
@@ -30,16 +30,16 @@ def test(model, test_loader, num_classes, device, test_dir, save_path=None):
             test_metrics.generate_matrix(preds, masks)
             #vis_path = os.path.join(save_path, f'test.png')
             date = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            vis_path = os.path.join(config.DataConfig.TEST_DIR, 'predictions', str(date) + "_" + str(index_pic) + ".png")
-            os.makedirs(os.path.dirname(vis_path), exist_ok=True)
-            if batch_idx% 10 == 0:
-                visualize_prediction(
-                    images[0],
-                    masks[0],
-                    preds[0],
-                    vis_path
-                )
-                index_pic += 1
+            #vis_path = os.path.join(config.DataConfig.TEST_DIR, 'predictions', str(date) + "_" + str(index_pic) + ".png")
+            #os.makedirs(os.path.dirname(vis_path), exist_ok=True)
+            # if batch_idx% 10 == 0:
+            #     visualize_prediction(
+            #         images[0],
+            #         masks[0],
+            #         preds[0],
+            #         vis_path
+            #     )
+            #     index_pic += 1
 
     results = {
         #'test_loss': total_loss / len(test_loader) if criterion is not None else None,
@@ -67,9 +67,9 @@ def main():
 
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     device = torch.device('cuda', local_rank)
-    num_classes = DataConfig.NUM_CLASSES  # Adjust as needed
+    num_classes = DataConfig.NUM_CLASSES
     # Load model
-    model = Model(num_classes=num_classes)  # No pretrained weights
+    model = Model(num_classes=num_classes)
     #model.load_state_dict(torch.load('/root/code/runs/20250619_011121/best_mIou_epoch_90.pth', map_location=device))
     state_dict = torch.load('/root/hy-nas/auto-weights-resnet50/20250823_005609/best_mIou_epoch_80.pth', map_location=device)
     # Remove 'module.' prefix if present

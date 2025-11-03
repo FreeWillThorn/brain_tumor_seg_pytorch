@@ -14,11 +14,10 @@ from src.config import *
 import torch.distributed as dist
 
 
-def train_one_epoch(model,train_dataloader, optimizer, device, criterion,epoch_counter=0):
-
+def train_one_epoch(model, train_dataloader, optimizer, device, criterion, epoch_counter=0):
     model.train()
     total_train_loss = 0.0
-    #total_edge_loss = 0.0
+    # total_edge_loss = 0.0
     # If using distributed training, wrap the dataloader with DistributedSampler
     if is_main_process():
         data_iter = tqdm(train_dataloader, desc=f"Epoch {epoch_counter}")  # Show epoch and LR in progress bar
@@ -29,19 +28,18 @@ def train_one_epoch(model,train_dataloader, optimizer, device, criterion,epoch_c
         mask = masks.to(device)
 
         optimizer.zero_grad()
-        seg_logit,log_var= model(image) # [B, C, H, W]
-        loss_main = criterion(seg_logit, mask,log_var)  # [B, H, W]
+        seg_logit, log_var = model(image)  # [B, C, H, W]
+        loss_main = criterion(seg_logit, mask, log_var)  # [B, H, W]
         loss_total = loss_main
         loss_total.backward()
         optimizer.step()
 
         total_train_loss += loss_total.item()
 
-
     return total_train_loss / len(train_dataloader)
 
-def evaluate(model, val_dataloader, num_classes, device, base_criterion,writer=None,epoch_counter=None):
 
+def evaluate(model, val_dataloader, num_classes, device, base_criterion, writer=None, epoch_counter=None):
     model.eval()
 
     total_val_loss = 0.0
@@ -51,7 +49,7 @@ def evaluate(model, val_dataloader, num_classes, device, base_criterion,writer=N
     with torch.no_grad():
         for batch_idx, (image, mask) in enumerate(data_iter):
             image, mask = image.to(device), mask.to(device)
-            seg_logit,log_var= model(image) # [B, C, H, W]
+            seg_logit, log_var = model(image)  # [B, C, H, W]
             pred = torch.argmax(seg_logit, dim=1)  # [B, H, W]
             loss_main = base_criterion(seg_logit, mask)
             loss_total = loss_main
@@ -82,12 +80,11 @@ def evaluate(model, val_dataloader, num_classes, device, base_criterion,writer=N
             writer.add_image('Validation/Colored_Pred', colored_pred, epoch_counter)
             writer.add_image('Validation/Overlay', overlay, epoch_counter)
 
-
     total_val_loss = total_val_loss / len(val_dataloader)
     iou_per_class = metrics.iou_per_class()
     mIoU = metrics.mean_iou()
     acc_per_class = metrics.acc_per_class()
-    mAcc= metrics.mean_accuracy()
+    mAcc = metrics.mean_accuracy()
     foreground_miou = metrics.mean_iou(ignore_inde_index=0)
     foreground_acc = metrics.mean_accuracy(ignore_inde_index=0)
     return {
@@ -101,10 +98,11 @@ def evaluate(model, val_dataloader, num_classes, device, base_criterion,writer=N
     }
 
 
-def train_with_validation(model, train_loader, val_loader, device, num_classes = config.num_classes,
-                          optimizer = config.optimizer, scheduler = config.scheduler, criterion=config.criterion, num_epochs=config.num_epochs,
-                            val_frequency=config.val_frequency, early_stopping_patience=config.EARLY_STOPPING, log_dir=config.DataConfig.WORK_DIR):
-
+def train_with_validation(model, train_loader, val_loader, device, num_classes=config.num_classes,
+                          optimizer=config.optimizer, scheduler=config.scheduler, criterion=config.criterion,
+                          num_epochs=config.num_epochs,
+                          val_frequency=config.val_frequency, early_stopping_patience=config.EARLY_STOPPING,
+                          log_dir=config.DataConfig.WORK_DIR):
     # Create a unique run name with timestamp
     run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
     writer = SummaryWriter(os.path.join(log_dir, run_name))
@@ -116,13 +114,14 @@ def train_with_validation(model, train_loader, val_loader, device, num_classes =
     best_checkpoint_path = None
     for epoch in range(num_epochs):
         epoch_counter = epoch + 1
-        total_train_loss= train_one_epoch(model, train_loader, optimizer, device, criterion,epoch_counter)
+        total_train_loss = train_one_epoch(model, train_loader, optimizer, device, criterion, epoch_counter)
         writer.add_scalar('Loss/Total Loss', total_train_loss, epoch_counter)
         writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], epoch_counter)
 
         scheduler.step()
-        if epoch_counter!= 0 and epoch_counter % val_frequency == 0:
-            val_metrics = evaluate(model, val_loader, num_classes, device, base_criterion,writer=writer, epoch_counter=epoch_counter)
+        if epoch_counter != 0 and epoch_counter % val_frequency == 0:
+            val_metrics = evaluate(model, val_loader, num_classes, device, base_criterion, writer=writer,
+                                   epoch_counter=epoch_counter)
 
             # Log to TensorBoard
             writer.add_scalar('val/total_loss', val_metrics['total_val_loss'], epoch_counter)
@@ -132,7 +131,6 @@ def train_with_validation(model, train_loader, val_loader, device, num_classes =
             writer.add_scalar('Metrics/foreground_Accuracy', val_metrics['Foreground_Accuracy'], epoch_counter)
             writer.add_scalar('Metrics/mIoU', val_metrics['mIoU'], epoch_counter)
             writer.add_scalar('Metrics/mAcc', val_metrics['mAcc'], epoch_counter)
-
 
             # Track metrics
             metrics = {
@@ -152,6 +150,11 @@ def train_with_validation(model, train_loader, val_loader, device, num_classes =
 
             # Early stopping check
             if val_metrics['Foreground_mIoU'] > best_val_miou:
+                if best_checkpoint_path and os.path.exists(best_checkpoint_path):
+                    os.remove(best_checkpoint_path)
+                    if is_main_process():
+                        tqdm.write(f"Removed previous best model at {best_checkpoint_path}")
+
                 best_val_miou = val_metrics['Foreground_mIoU']
                 patience_counter = 0
                 # Save best model
@@ -160,7 +163,7 @@ def train_with_validation(model, train_loader, val_loader, device, num_classes =
                 torch.save(model.state_dict(), save_path)
                 best_checkpoint_path = save_path
                 if is_main_process():
-                    tqdm.write(f"New best model saved at epoch {epoch_counter} with mIoU: {best_val_miou:.4f}")
+                    tqdm.write(f"####### New best model saved at epoch {epoch_counter} with mIoU: {best_val_miou:.4f}")
             else:
                 patience_counter += 1
 
@@ -175,31 +178,43 @@ def train_with_validation(model, train_loader, val_loader, device, num_classes =
 
             training_history.append(metrics)
             if is_main_process():
-                tqdm.write(f"Epoch {epoch_counter:03d} | Train Loss: {total_train_loss:.4f}  | LR: {optimizer.param_groups[0]['lr']:.6f}")
-
+                tqdm.write(
+                    f"Epoch {epoch_counter:03d} | Train Loss: {total_train_loss:.4f}  | LR: {optimizer.param_groups[0]['lr']:.6f}")
 
     writer.close()
 
     return best_checkpoint_path
 
 
-
-
 def main():
     if torch.cuda.is_available():
         dist.init_process_group(backend='nccl')
         local_rank = int(os.environ['LOCAL_RANK'])
-        #print(local_rank)
         config.device = torch.device('cuda', local_rank)
+
+        img_ids_json = os.environ.get('AL_IMG_IDS_JSON')
+        labeled_ids = json.loads(img_ids_json) if img_ids_json else None
+
+        from src.cocodataset import COCODataset
+        train_dataset = COCODataset(
+            os.path.join(config.DataConfig.BASE_DIR, config.DataConfig.SPLITS['train'], 'image'),
+            os.path.join(config.DataConfig.BASE_DIR, config.DataConfig.SPLITS['train'], 'mask'),
+            os.path.join(config.DataConfig.BASE_DIR, config.DataConfig.SPLITS['train'], '_annotations.coco.json'),
+            transform=config.TransformConfig.TRAIN_TRANSFORM,
+            img_ids_list=labeled_ids
+        )
+
         model = config.model.to(config.device)
-        #weights = config.weights.to(device)
-        #weighted_criterion = torch.nn.CrossEntropyLoss(weight=weights).to(device)
-        ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+        # weights = config.weights.to(device)
+        # weighted_criterion = torch.nn.CrossEntropyLoss(weight=weights).to(device)
+        ddp_model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[local_rank], find_unused_parameters=True
+        )
 
         # Create DistributedSampler and DataLoader after process group is initialized
-        train_sampler = DistributedSampler(config.train_dataset)
+        train_sampler = DistributedSampler(train_dataset)
         train_loader = DataLoader(
-            config.train_dataset,
+            train_dataset,
             batch_size=config.TrainConfig.BATCH_SIZE,
             sampler=train_sampler,
             shuffle=False,
@@ -222,9 +237,8 @@ def main():
         num_workers=config.TrainConfig.NUM_WORKERS
     )
 
-    
-
-    train_with_validation(ddp_model, train_loader, val_loader,config.device)
+    log_dir = os.environ.get('AL_WORKDIR', config.DataConfig.AL_DIR)
+    train_with_validation(ddp_model, train_loader, val_loader, config.device,log_dir=log_dir)
     # Save training history to a JSON file
 
 

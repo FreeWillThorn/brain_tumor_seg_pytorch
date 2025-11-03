@@ -254,9 +254,9 @@ class MobileNetV3Backbone(nn.Module):
         features = self.backbone.backbone(x)
         return [features['out'], features['aux']]  # Return the main output and auxiliary output
 
-class Model(nn.Module):
+class Model_all(nn.Module):
     def __init__(self, num_classes, weights=None):
-        super(Model, self).__init__()
+        super(Model_all, self).__init__()
         #self.backbone = ResnetBackbone()
         self.backbone = ConvNeXtBackbone()
         #self.msaf = MultiScaleAdaptiveFusion(inchannels_list=[256, 512, 1024, 2048])

@@ -61,7 +61,7 @@ class HybridLoss_image_wise_uncertainty(nn.Module):
     def __init__(self, ce_weight=None, dice_weight=0.9, ce_weight_tensor=None):
         super(HybridLoss_image_wise_uncertainty, self).__init__()
         self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor)
-        self.dice = DiceLoss_pic_wise() # Use the new DiceLoss_new for per-image calculation
+        self.dice = DiceLoss_pic_wise()
         self.dice_weight = dice_weight
         self.ce_weight = 1 - dice_weight
 
@@ -71,10 +71,7 @@ class HybridLoss_image_wise_uncertainty(nn.Module):
         # Scale by uncertainty
         log_var = log_var.squeeze(1)  # shape [B, H, W]
         log_var = F.adaptive_avg_pool2d(log_var, (1, 1)).squeeze()  # [B]
-        # stabilize
-        #log_var = torch.clamp(log_var, -5.0, 5.0)
-        # optional temperature to de-emphasize uncertainty (start < 1.0)
-        #tau = 0.5
+        #log_var = torch.clamp(log_var, -5.0, 5.0) # or use regularization, to prevent the model doesnt learn on hard area
         weighted_loss = (1 / (2 * torch.exp(log_var))) * hybrid_loss + 0.5 * log_var
         return weighted_loss.mean()
 
@@ -82,7 +79,7 @@ class HybridLoss_image_wise_uncertainty(nn.Module):
 class HybridLoss_pixel_wise_uncertainty(nn.Module):
     def __init__(self, ce_weight_tensor=None, dice_weight=0.7):
         super(HybridLoss_pixel_wise_uncertainty, self).__init__()
-        self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor, reduction='none')  # per-pixel
+        self.ce = nn.CrossEntropyLoss(weight=ce_weight_tensor, reduction='none')
         self.dice = DiceLoss_pic_wise()  # per-image
         self.dice_weight = dice_weight
         self.ce_weight = 1 - dice_weight

@@ -10,18 +10,21 @@ from torch.utils.data.distributed import DistributedSampler
 from torchvision.transforms import v2
 
 from src.cocodataset import COCODataset
-from src.loss import HybridLoss, DiceLoss, HybridLoss_pixel_wise_uncertainty, HybridLoss_image_wise_uncertainty, \
-    edge_dice_loss, combo_loss
-from src.model_all import ResnetBackbone, Model, Resnet_model_backbone_mse, Swin_backbone
+from src.loss import HybridLoss, HybridLoss_image_wise_uncertainty
+#from src.model_all import ResnetBackbone, Model, Resnet_model_backbone_mse, Swin_backbone
 from collections import Counter
 import numpy as np
 import torch.distributed as dist
+
+from src.model import Model
+
 
 # Dataset Configuration
 class DataConfig:
     BASE_DIR = '/root/final_dataset_edge'
     WORK_DIR = '/root/hy-nas/auto-weights-resnet50'
     TEST_DIR = '/root/hy-data/auto-weights-resnet50-test'
+    AL_DIR = '/root/hy-nas/AL_workdir'
     SPLITS = {
         'train': 'train',
         'valid': 'valid',
@@ -32,20 +35,25 @@ class DataConfig:
     ]
     NUM_CLASSES = len(CLASS_NAMES)
 
+class ALConfig:
+    METHOD = 'entropy'
+    AL_DIR = f'/root/hy-nas/AL_workdir/{METHOD}'
+    N_QUERY = 412  # samples per round to add
+    N_ROUNDS = 8  # number of AL rounds
 
 # Training Configuration
 class TrainConfig:
     BATCH_SIZE = 4
     NUM_EPOCHS = 100
     VAL_FREQUENCY = 10
-    NUM_WORKERS = 4
+    NUM_WORKERS = 8
 
     # Optimizer settings
     LEARNING_RATE = 1e-4
     BETAS = (0.9, 0.999)
     EPSILON = 1e-8
     WEIGHT_DECAY = 1e-4
-    EARLY_STOPPING = 10
+    EARLY_STOPPING = 3
     WARM_UP_EPOCHS = 10
 
     # Scheduler settings
@@ -91,7 +99,7 @@ class TransformConfig:
 train_dataset = COCODataset(
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['train'], 'image'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['train'], 'mask'),
-    os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['train'], 'edge_masks'),
+    #os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['train'], 'edge_masks'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['train'], '_annotations.coco.json'),
     transform=TransformConfig.TRAIN_TRANSFORM
 )
@@ -99,7 +107,7 @@ train_dataset = COCODataset(
 val_dataset = COCODataset(
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['valid'], 'image'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['valid'], 'mask'),
-    os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['valid'], 'edge_masks'),
+    #os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['valid'], 'edge_masks'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['valid'], '_annotations.coco.json'),
     transform=TransformConfig.VAL_TRANSFORM
 )
@@ -107,7 +115,7 @@ val_dataset = COCODataset(
 test_dataset = COCODataset(
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['test'], 'image'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['test'], 'mask'),
-    os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['test'], 'edge_masks'),
+    #os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['test'], 'edge_masks'),
     os.path.join(DataConfig.BASE_DIR, DataConfig.SPLITS['test'], '_annotations.coco.json'),
     transform=TransformConfig.TEST_TRANSFORM
 )
@@ -135,7 +143,10 @@ model = Model(num_classes=DataConfig.NUM_CLASSES)
 #model = Swin_backbone(num_classes=DataConfig.NUM_CLASSES)
 
 #weights = torch.tensor([0.1, 1, 1, 1, 1, 1, 1, 1]).to(device)
-local_rank = int(os.environ['LOCAL_RANK'])
+if 'LOCAL_RANK' in os.environ:
+    local_rank = int(os.environ['LOCAL_RANK'])
+else:
+    local_rank = 0
 device = torch.device('cuda', local_rank)
 
 class_weights = torch.tensor([0.1,

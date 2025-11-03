@@ -4,7 +4,7 @@ import torch.nn as nn
 from torchvision.models import resnet50, swin_transformer, swin_v2_b, ResNet50_Weights, Swin_V2_B_Weights, \
     convnext_large, ConvNeXt_Large_Weights, ResNet152_Weights, resnet101
 from torchvision.ops import SqueezeExcitation
-from torchinfo import summary
+#from torchinfo import summary
 import torch.nn.functional as F
 
 
@@ -16,10 +16,9 @@ class MultiScaleExtraction(nn.Module):
         self.conv7 = nn.Conv2d(inchannels, inchannels, kernel_size=7, padding=3)
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.gap_conv = nn.Conv2d(inchannels, inchannels, kernel_size=1)
-
-        self.attention_mechanism = SqueezeExcitation(inchannels * 4, inchannels * 4)  # SqueezeExcitation block
-        #self.attention_mechanism = CBAM(inchannels * 4,r=8)  # CBAM block
-        self.channel_reducer = nn.Conv2d(inchannels * 4, outchannels, kernel_size=1, padding=0)  # 4 feature maps concatenated
+        self.attention_mechanism = SqueezeExcitation(inchannels * 4, inchannels * 4)  # SE
+        #self.attention_mechanism = CBAM(inchannels * 4,r=8)  # CBAM doesnt work well
+        self.channel_reducer = nn.Conv2d(inchannels * 4, outchannels, kernel_size=1, padding=0)  # to->1/4
         self.dropout = nn.Dropout2d(p=0.2)
 
 
@@ -113,8 +112,8 @@ class Model(nn.Module):
         #self.mse = MultiScaleExtraction(2048,2048)
         self.msaf = MultiScaleAdaptiveFusion(inchannels_list=[192, 384, 768, 1536])
         self.mse = MultiScaleExtraction(1536, 1536)
-        final_out_channels = self.msaf.final_out_channel
-        #final_out_channels = 1536
+        #final_out_channels = self.msaf.final_out_channel
+        final_out_channels = 1536
         self.classifier = nn.Conv2d(final_out_channels, num_classes, kernel_size=1)
         self.log_var_head = nn.Conv2d(final_out_channels, 1, kernel_size=1)
         self.seg_head = nn.Sequential(
@@ -128,7 +127,7 @@ class Model(nn.Module):
         features = self.backbone(x)
         features[3] = self.mse(features[3]) # module - fusion
         fused_features =features[3] # only backbone
-        #fused_features = self.msaf(features) #module - skip connection
+        #fused_features = self.msaf(features) #module - skip connection xxxxxxxxxxxxxxx
         #fused_features = self.dropout(fused_features)
         seg_logits = self.seg_head(fused_features)
         var_logits = self.log_var_head(fused_features)
