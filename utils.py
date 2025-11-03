@@ -78,12 +78,13 @@ def tensor_to_python(obj):
 
 def visualize_prediction(image, mask, pred, save_path):
     """
-    Visualize the prediction overlapped on the input image.
-    Args:
+
+
         image: tensor of shape [3, H, W]
         mask: tensor of shape [H, W]
         pred: tensor of shape [H, W]
         save_path: path to save the visualization
+
     """
 
 
